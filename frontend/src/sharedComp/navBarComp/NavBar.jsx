@@ -4,7 +4,7 @@ import { jwtDecode } from 'jwt-decode';
 import LeftSiderUp from '../LeftSideHomeComp/LeftSiderUp'; // Import the LeftSiderUp component
 import MenuIcon from '@mui/icons-material/Menu';
 
-const TITLE = 'Authenticator';
+const TITLE = 'SecurePass';
 
 const useStyle = {
   backgroundColor: '#09090b',

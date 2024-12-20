@@ -1,6 +1,21 @@
 const jwt = require("jsonwebtoken");
 const { UserData, UserLogin } = require("../model/userData");
 const bcrypt = require("bcrypt");
+const CryptoJS = require("crypto-js");
+
+// Encryption key (move to environment variables in production)
+const ENCRYPTION_KEY =
+  "29fa254c0050bd2bcca4aad45b3e22c8cabde8a685004b4cb119850d45ecc33e";
+
+// Encryption/decryption helper functions
+const encryptData = (text) => {
+  return CryptoJS.AES.encrypt(text, ENCRYPTION_KEY).toString();
+};
+
+const decryptData = (encryptedText) => {
+  const bytes = CryptoJS.AES.decrypt(encryptedText, ENCRYPTION_KEY);
+  return bytes.toString(CryptoJS.enc.Utf8);
+};
 
 // Helper function to capitalize words
 const capitalizeWords = (input) => {
@@ -15,7 +30,14 @@ exports.getAllUserData = async (req, res) => {
     if (!userData) {
       return res.status(404).send({ message: "User not found" });
     }
-    res.status(200).json(userData);
+
+    // Decrypt passwords before sending response
+    const decryptedData = userData.map((data) => ({
+      ...data.toObject(),
+      password: decryptData(data.password),
+    }));
+
+    res.status(200).json(decryptedData);
   } catch (error) {
     console.error("Error in getUserDataById:", error);
     return res.status(500).send({ message: "Error", error: error.message });
@@ -26,36 +48,56 @@ exports.getAllUserData = async (req, res) => {
 exports.createUserData = async (req, res) => {
   try {
     const { appName, userName, password, loginEmail } = req.body;
-
     const capitalizedAppName = capitalizeWords(appName.trim());
+
+    // Encrypt the password
+    const encryptedPassword = encryptData(password);
 
     const existingUserLogin = await UserLogin.findOne({ loginEmail });
     if (existingUserLogin) {
-        const existingUser = await UserData.findOne({
-          appName: capitalizedAppName,
-          userLogin: existingUserLogin._id,
-        });
+      const existingUser = await UserData.findOne({
+        appName: capitalizedAppName,
+        userLogin: existingUserLogin._id,
+      });
       if (existingUser) {
         return res.status(400).send({ message: "Data already exists" });
       } else {
-          const userData = new UserData({
-            appName: capitalizedAppName,
-            userName, password,
-            userLogin: existingUserLogin._id, // Assign the ObjectId of userLogin
-          });
-        await userData.save();
-        return res.status(201).send({ message: "User created successfully", data: userData });
-      }
-    } else {
-        const userLogin = new UserLogin({ loginEmail });
-        await userLogin.save();
         const userData = new UserData({
           appName: capitalizedAppName,
-          userName, password,
-          userLogin: userLogin._id,
+          userName,
+          password: encryptedPassword,
+          userLogin: existingUserLogin._id,
         });
         await userData.save();
-        return res.status(201).send({ message: "User created successfully", data: userData });
+
+        // Decrypt password for response
+        const responseData = userData.toObject();
+        responseData.password = decryptData(responseData.password);
+
+        return res.status(201).send({
+          message: "User created successfully",
+          data: responseData,
+        });
+      }
+    } else {
+      const userLogin = new UserLogin({ loginEmail });
+      await userLogin.save();
+      const userData = new UserData({
+        appName: capitalizedAppName,
+        userName,
+        password: encryptedPassword,
+        userLogin: userLogin._id,
+      });
+      await userData.save();
+
+      // Decrypt password for response
+      const responseData = userData.toObject();
+      responseData.password = decryptData(responseData.password);
+
+      return res.status(201).send({
+        message: "User created successfully",
+        data: responseData,
+      });
     }
   } catch (error) {
     console.error("Error in createUserData:", error);
@@ -69,7 +111,9 @@ exports.updateUserData = async (req, res) => {
   const reqBody = req.body;
 
   try {
-    const existingUser = await UserData.findById({ _id: id }).populate("userLogin");
+    const existingUser = await UserData.findById({ _id: id }).populate(
+      "userLogin"
+    );
     if (!existingUser) {
       return res.status(404).send({ message: "User not found" });
     }
@@ -77,14 +121,29 @@ exports.updateUserData = async (req, res) => {
       return res.status(401).send({ message: "Unauthorized access" });
     }
 
+    // Encrypt password if it's being updated
+    if (reqBody.password) {
+      reqBody.password = encryptData(reqBody.password);
+    }
+
     const updatedUserData = await UserData.findByIdAndUpdate(id, reqBody, {
-      new: true, // Return the updated document
-      runValidators: true, // Run Mongoose validators to ensure data integrity
+      new: true,
+      runValidators: true,
     });
-    return res.status(202).send({ message: "Data has been updated", data: updatedUserData });
+
+    // Decrypt password before sending response
+    const responseData = updatedUserData.toObject();
+    responseData.password = decryptData(responseData.password);
+
+    return res.status(202).send({
+      message: "Data has been updated",
+      data: responseData,
+    });
   } catch (error) {
     console.error("Error occurred during update:", error);
-    return res.status(500).send({ message: "Error updating data", error: error });
+    return res
+      .status(500)
+      .send({ message: "Error updating data", error: error });
   }
 };
 
@@ -96,17 +155,25 @@ exports.login = async (req, res) => {
     if (!user) {
       return res.status(404).send({ message: "User not found" });
     }
-    const isMatched = await bcrypt.compare(loginPassword, user.loginPassword); // Compare passwords
+    const isMatched = await bcrypt.compare(loginPassword, user.loginPassword);
     if (!isMatched) {
       return res.status(401).send({ message: "Invalid Password" });
     }
-    const token = jwt.sign({
-      _id: user._id,
-      loginEmail: user.loginEmail,
-      name: user.name,
-    }, 'yourjwtsectrate', {expiresIn: '10'})
-    // Password matched, return success response
-    return res.status(200).send({ message: "User LoggedIn", data: user, token : token });
+    const token = jwt.sign(
+      {
+        _id: user._id,
+        loginEmail: user.loginEmail,
+        name: user.name,
+      },
+      "yourjwtsectrate",
+      { expiresIn: "10h" }
+    ); // Changed to 10 hours from 10
+
+    return res.status(200).send({
+      message: "User LoggedIn",
+      data: user,
+      token: token,
+    });
   } catch (error) {
     console.error("Error occurred during login:", error);
     return res.status(500).send({ message: "Error logging in", error: error });
@@ -122,7 +189,7 @@ exports.signup = async (req, res) => {
       return res.status(400).send({ message: "User already exists" });
     }
 
-    const hashedPassword = await bcrypt.hash(loginPassword, 10); // Hash the password
+    const hashedPassword = await bcrypt.hash(loginPassword, 10);
 
     const newUser = new UserLogin({
       name: name,
@@ -134,7 +201,9 @@ exports.signup = async (req, res) => {
     return res.status(201).send({ message: "User Created", data: newUser });
   } catch (error) {
     console.error("Error occurred during signup:", error);
-    return res.status(500).send({ message: "Error creating user", error: error });
+    return res
+      .status(500)
+      .send({ message: "Error creating user", error: error });
   }
 };
 
@@ -163,12 +232,14 @@ exports.updatePassword = async (req, res) => {
     if (!existingUser) {
       return res.status(404).send({ message: "User not found" });
     }
-    
-    const hashedPassword = await bcrypt.hash(loginPassword, 10);
-    existingUser.loginPassword = hashedPassword
 
-    await existingUser.save()
-    res.status(202).send({ message: "Data has been updated", data: existingUser });
+    const hashedPassword = await bcrypt.hash(loginPassword, 10);
+    existingUser.loginPassword = hashedPassword;
+
+    await existingUser.save();
+    res
+      .status(202)
+      .send({ message: "Data has been updated", data: existingUser });
   } catch (error) {
     return res.status(500).send({ message: "error", error: error });
   }
