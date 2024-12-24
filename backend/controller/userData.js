@@ -2,10 +2,10 @@ const jwt = require("jsonwebtoken");
 const { UserData, UserLogin } = require("../model/userData");
 const bcrypt = require("bcrypt");
 const CryptoJS = require("crypto-js");
+require("dotenv").config(); // Add this line to load environment variables
 
-// Encryption key (move to environment variables in production)
-const ENCRYPTION_KEY =
-  "29fa254c0050bd2bcca4aad45b3e22c8cabde8a685004b4cb119850d45ecc33e";
+// Encryption key from environment variables
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
 // Encryption/decryption helper functions
 const encryptData = (text) => {
